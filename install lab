@@ -1,0 +1,122 @@
+To deploy Splunk Enterprise on six Red Hat Enterprise Linux (RHEL) 9 servers—comprising a search head cluster (3 nodes), an indexer cluster (2 nodes), and a utility server (acting as both cluster manager and deployer)—follow this comprehensive step-by-step guide.
+
+**1. Prepare the Linux Machines**
+
+Before installing Splunk, ensure each server is properly prepared:
+
+- **Create the 'splunk' User:**
+  ```bash
+  sudo useradd -m splunk
+  sudo passwd splunk
+  ```
+  This creates a new user named 'splunk' and sets its password.
+
+- **Set Appropriate Permissions:**
+  ```bash
+  sudo mkdir -p /opt/splunk
+  sudo chown -R splunk:splunk /opt/splunk
+  ```
+  This ensures the 'splunk' user has ownership of the installation directory.
+
+**2. Install Splunk Enterprise**
+
+Download the Splunk Enterprise RPM package suitable for RHEL 9 from the [Splunk Downloads page](https://www.splunk.com/en_us/download/splunk-enterprise.html).
+
+- **Transfer the RPM Package to Each Server:**
+  Use `scp` or another secure method to copy the RPM package to each server.
+
+- **Install the RPM Package:**
+  ```bash
+  sudo rpm -i /path/to/splunk_package_name.rpm
+  ```
+  This installs Splunk Enterprise into the default directory `/opt/splunk`.
+
+**3. Configure the Utility Server**
+
+The utility server will function as both the cluster manager for the indexer cluster and the deployer for the search head cluster.
+
+- **Set Up the Cluster Manager:**
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk enable boot-start
+  sudo -u splunk /opt/splunk/bin/splunk start
+  sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode manager -replication_factor 2 -secret <your_secret_key> -auth admin:changeme
+  sudo -u splunk /opt/splunk/bin/splunk restart
+  ```
+  This configures the server as the cluster manager with a replication factor of 2.
+
+- **Set Up the Deployer:**
+  Edit the `server.conf` file to set the security key for the search head cluster:
+  ```bash
+  sudo -u splunk vi /opt/splunk/etc/system/local/server.conf
+  ```
+  Add the following under the `[shclustering]` stanza:
+  ```
+  [shclustering]
+  pass4SymmKey = <your_shcluster_key>
+  ```
+  Restart Splunk to apply changes:
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk restart
+  ```
+
+**4. Configure the Indexer Cluster**
+
+On each of the two indexer nodes:
+
+- **Initialize as Peer Nodes:**
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk enable boot-start
+  sudo -u splunk /opt/splunk/bin/splunk start
+  sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode peer -manager_uri https://<utility_server_ip>:8089 -replication_port 9887 -secret <your_secret_key> -auth admin:changeme
+  sudo -u splunk /opt/splunk/bin/splunk restart
+  ```
+  This configures each indexer to communicate with the cluster manager.
+
+**5. Configure the Search Head Cluster**
+
+On each of the three search head nodes:
+
+- **Initialize as Search Head Cluster Members:**
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk enable boot-start
+  sudo -u splunk /opt/splunk/bin/splunk start
+  sudo -u splunk /opt/splunk/bin/splunk init shcluster-config -mgmt_uri https://<search_head_ip>:8089 -replication_port 9887 -conf_deploy_fetch_url https://<utility_server_ip>:8089 -secret <your_shcluster_key> -shcluster_label shcluster1 -auth admin:changeme
+  sudo -u splunk /opt/splunk/bin/splunk restart
+  ```
+  This sets up each search head as a member of the search head cluster.
+
+- **Bootstrap the Search Head Cluster:**
+  On one of the search heads, run:
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk bootstrap shcluster-captain -servers_list "https://<sh1_ip>:8089,https://<sh2_ip>:8089,https://<sh3_ip>:8089" -auth admin:changeme
+  ```
+  This designates the initial captain for the search head cluster.
+
+**6. Integrate Search Head Cluster with Indexer Cluster**
+
+On each search head node:
+
+- **Configure as Search Heads for the Indexer Cluster:**
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk edit cluster-config -mode searchhead -manager_uri https://<utility_server_ip>:8089 -secret <your_secret_key> -auth admin:changeme
+  sudo -u splunk /opt/splunk/bin/splunk restart
+  ```
+  This connects the search head cluster to the indexer cluster.
+
+**7. Deploy Apps and Configurations**
+
+Use the deployer on the utility server to distribute apps and configurations to the search head cluster:
+
+- **Distribute Configurations:**
+  Place the desired apps or configurations in `$SPLUNK_HOME/etc/shcluster/apps/` on the deployer.
+  Then, run:
+  ```bash
+  sudo -u splunk /opt/splunk/bin/splunk apply shcluster-bundle -target https://<search_head_ip>:8089 -auth admin:changeme
+  ```
+  This deploys the configurations to all search head cluster members.
+
+**8. Finalize the Deployment**
+
+Ensure all components are communicating correctly:
+
+- **Verify Cluster Status: 
